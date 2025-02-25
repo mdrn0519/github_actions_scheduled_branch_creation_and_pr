@@ -1,0 +1,64 @@
+name: Scheduled Branch Creation and PR Creation.
+
+on:
+  schedule:
+    # 日本時間で毎週水曜日と金曜日の午前9時 (UTC では 00:00)
+    - cron: "0 0 * * 3,5"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-release-branch-and-pr:
+    runs-on: ubuntu-latest
+
+    env:
+      TZ: "Asia/Tokyo"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # mainとdevelopの差分を確認
+      - name: Check for changes between develop and main
+        id: check_changes
+        run: |
+          git fetch origin develop main
+          DIFF_COUNT=$(git rev-list --count origin/main..origin/develop)
+          echo "差分コミット数: $DIFF_COUNT"
+          echo "has_changes=$([[ $DIFF_COUNT -gt 0 ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+
+      # mainとdevelopの間に差分がなければ終了
+      - name: Exit if no changes
+        if: steps.check_changes.outputs.has_changes == 'false'
+        run: |
+          echo "mainブランチとdevelopブランチの間に差分がないので、PRの作成はされません"
+          exit 0
+
+      # ブランチ名を生成
+      - name: Generate branch name
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          echo "BRANCH_NAME=release/$(date +'%Y%m%d%H%M')" >> $GITHUB_ENV
+
+      # リリースブランチを作成
+      - name: Create release branch
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          git fetch
+          git checkout -b $BRANCH_NAME origin/develop
+          git push -u origin $BRANCH_NAME
+
+      # mainに向けてリリースブランチのPRを作成
+      - name: Create Pull Request with GitHub CLI
+        if: steps.check_changes.outputs.has_changes == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "リリース - $(date +'%Y/%m/%d')" \
+            --body "" \
+            --base main \
+            --head $BRANCH_NAME \
+            --draft
